@@ -13,6 +13,23 @@ provider "aws" {
     
 }
 
+//AMI configuration
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  # Canonical
+  owners = ["099720109477"]
+}
 resource "aws_vpc" "wordpress-vpc" {
   cidr_block       = var.cidr_block
   instance_tenancy = "default"
@@ -20,7 +37,7 @@ resource "aws_vpc" "wordpress-vpc" {
   tags = {
     Name = "wordpress-VPC"
     project = "wordpress"
-    environment = var.environment[0]
+    Environment = var.environment[0]
   }
 }
 
@@ -34,7 +51,7 @@ resource "aws_subnet" "subnet1" {
     Name = "wordpress-subnet-pub1"
     Type = "Public"
     project = "wordpress"
-    environment = var.environment[0]
+    Environment = var.environment[0]
   }
 }
 
@@ -47,7 +64,7 @@ resource "aws_subnet" "subnet2" {
     Name = "wordpress-subnet-pub2"
     Type = "Public"
     project = "wordpress"
-    environment = var.environment[0]
+    Environment = var.environment[0]
   }
 }
 
@@ -58,10 +75,10 @@ resource "aws_subnet" "subnet3" {
   availability_zone = var.availability_zones[0]
 
   tags = {
-    Name = "wordpress-subnet-pri1"
+    Name = "wordpress-server-subnet1"
     Type = "Private"
     project = "wordpress"
-    environment = var.environment[0]
+    Environment = var.environment[0]
   }
 }
 
@@ -71,13 +88,38 @@ resource "aws_subnet" "subnet4" {
   availability_zone = var.availability_zones[1]
 
   tags = {
-    Name = "wordpress-subnet-pri2"
+    Name = "wordpress-server-subnet2"
     Type = "Private"
     project = "wordpress"
-    environment = var.environment[0]
+    Environment = var.environment[0]
   }
 }
 
+resource "aws_subnet" "subnet5" {
+  vpc_id            = aws_vpc.wordpress-vpc.id
+  cidr_block        = cidrsubnet(var.cidr_block, 8, 5)
+  availability_zone = var.availability_zones[0]
+
+  tags = {
+    Name = "wordpress-data-subnet1"
+    Type = "Private"
+    project = "wordpress"
+    Environment = var.environment[0]
+  }
+}
+
+resource "aws_subnet" "subnet6" {
+  vpc_id            = aws_vpc.wordpress-vpc.id
+  cidr_block        = cidrsubnet(var.cidr_block, 8, 6)
+  availability_zone = var.availability_zones[0]
+
+  tags = {
+    Name = "wordpress-data-subnet2"
+    Type = "Private"
+    project = "wordpress"
+    Environment = var.environment[0]
+  }
+}
 //Internet gateway 
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.wordpress-vpc.id
@@ -85,7 +127,7 @@ resource "aws_internet_gateway" "igw" {
   tags = {
     Name = "wordpress-igw"
     project = "wordpress"
-    environment = var.environment[0]
+    Environment = var.environment[0]
   }
 }
 
@@ -116,7 +158,7 @@ resource "aws_route_table" "route1" {
   tags = {
     Name = "Public route"
     project = "wordpress"
-    environment = var.environment[0]
+    Environment = var.environment[0]
   }
 }
 
@@ -131,7 +173,7 @@ resource "aws_route_table" "route2" {
   tags = {
     Name = "Private route"
     project = "wordpress"
-    environment = var.environment[0]
+    Environment = var.environment[0]
   }
 }
 
@@ -161,7 +203,7 @@ resource "aws_security_group" "wordpress-server" {
   vpc_id      = aws_vpc.wordpress-vpc.id
 
   ingress {
-    description = "SSH from anywhere"
+    description = "SSH from only from my computer"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -187,12 +229,14 @@ resource "aws_security_group" "wordpress-server" {
   }
 
   tags = {
-    Name = "Allow Traffic"
+    Name = "Wordpress Server Traffic"
+    project = "wordpress"
   }
 }
 
-resource "aws_security_group" "alb" {
-  name        = "alb"
+
+resource "aws_security_group" "wordpress-alb" {
+  name        = "wordpress-alb"
   description = "alb network traffic"
   vpc_id      = aws_vpc.wordpress-vpc.id
 
@@ -212,13 +256,29 @@ resource "aws_security_group" "alb" {
   }
 
   tags = {
-    Name = "Allow  Traffic"
+    Name = "ALB Traffic"
     project = "wordpress"
   }
 }
 
+//Internet facing application load balancer
 
-/*
+resource "aws_lb" "wordpress-alb" {
+  name               = "test-lb-tf"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.wordpress-alb.id]
+  subnets            = [aws_subnet.subnet1.id, aws_subnet.subnet2.id]
+
+
+  enable_deletion_protection = true
+
+  tags = {
+    Environment = var.environment[0]
+  }
+}
+
+
 //launch templates
 resource "aws_launch_template" "launchtemplate1" {
   name = "web"
@@ -238,6 +298,6 @@ resource "aws_launch_template" "launchtemplate1" {
     }
   }
 
-  user_data = filebase64("${path.module}/ec2.userdata")
-}*/
+  user_data = "${file("install_wordpress.sh")}"
+}
 
