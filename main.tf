@@ -264,28 +264,38 @@ resource "aws_security_group" "wordpress-alb" {
 //Internet facing application load balancer
 
 resource "aws_lb" "wordpress-alb" {
-  name               = "test-lb-tf"
+  name               = "wordpress-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.wordpress-alb.id]
   subnets            = [aws_subnet.subnet1.id, aws_subnet.subnet2.id]
 
 
-  enable_deletion_protection = true
+  enable_deletion_protection = false
 
   tags = {
     Environment = var.environment[0]
   }
 }
 
+// create key pairs 
+resource "tls_private_key" "wordpress-key" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "generated_key" {
+  key_name   = var.key_name
+  public_key = tls_private_key.wordpress-key.public_key_openssh
+}
 
 //launch templates
 resource "aws_launch_template" "launchtemplate1" {
-  name = "web"
+  name = "wordpress-template"
 
   image_id               = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
-  key_name               = var.key_name
+  key_name               = aws_key_pair.generated_key.key_name
   vpc_security_group_ids = [aws_security_group.wordpress-server.id]
 
   tag_specifications {
@@ -299,5 +309,56 @@ resource "aws_launch_template" "launchtemplate1" {
   }
 
   user_data = "${file("install_wordpress.sh")}"
+}
+
+// ALB target,  Listener
+resource "aws_alb_target_group" "wordpress-server" {
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.wordpress-vpc.id
+}
+
+resource "aws_alb_listener" "front_end" {
+  load_balancer_arn = aws_lb.wordpress-alb.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_alb_target_group.wordpress-server.arn
+  }
+}
+
+resource "aws_alb_listener_rule" "alb-rule1" {
+  listener_arn = aws_alb_listener.front_end.arn
+  priority     = 99
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_alb_target_group.wordpress-server.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/"]
+    }
+  }
+}
+
+// Auto Scaling group 
+
+resource "aws_autoscaling_group" "asg" {
+  vpc_zone_identifier = [aws_subnet.subnet3.id, aws_subnet.subnet4.id]
+
+  desired_capacity = 2
+  max_size         = 2
+  min_size         = 2
+
+  target_group_arns = [aws_alb_target_group.wordpress-server.arn]
+
+  launch_template {
+    id      = aws_launch_template.launchtemplate1.id
+    version = "$Latest"
+  }
 }
 
