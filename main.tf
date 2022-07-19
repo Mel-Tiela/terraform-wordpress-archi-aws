@@ -361,4 +361,38 @@ resource "aws_autoscaling_group" "asg" {
     version = "$Latest"
   }
 }
+//Aurora db credentials.  
+/*data "aws_secretsmanager_secret_version" "creds" {
+  name = "db credentials"
+  secret_id = "wordpress-db-credentials"
+}
+
+locals {
+  db_credentials = jsondecode(data.aws_secretsmanager_secret_version.creds.secret_string)
+} */
+
+data "aws_secretsmanager_secret_version" "creds" {
+  secret_id = "wordpress-db-credentials"
+}
+
+
+locals {
+  db_creds = jsondecode(
+    data.aws_secretsmanager_secret_version.creds.secret_string
+  )
+}
+
+
+
+// Add Aurora cluster config
+resource "aws_rds_cluster" "wordpress-aurora-cluster" {
+  cluster_identifier      = "aurora-cluster-wordpress"
+  engine                  = "aurora-mysql"
+  availability_zones      = var.availability_zones
+  database_name           = "wordpressdb"
+  master_username         = local.db_creds.username
+  master_password         = local.db_creds.password
+  backup_retention_period = 5
+  preferred_backup_window = "02:00-04:00"
+}
 
