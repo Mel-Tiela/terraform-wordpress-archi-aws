@@ -147,6 +147,9 @@ resource "aws_nat_gateway" "nat" {
   depends_on = [aws_internet_gateway.igw]
 }
 
+// add a second nat gateway for the other public subnet
+
+
 resource "aws_route_table" "route1" {
   vpc_id = aws_vpc.wordpress-vpc.id
 
@@ -196,18 +199,18 @@ resource "aws_route_table_association" "rta4" {
   subnet_id      = aws_subnet.subnet4.id
   route_table_id = aws_route_table.route2.id
 }
-//Securtity group configuration
+//Securtity group configuration private 
 resource "aws_security_group" "wordpress-server" {
   name        = "wordpress-server"
   description = "wordpress-server network traffic"
   vpc_id      = aws_vpc.wordpress-vpc.id
 
   ingress {
-    description = "SSH from only from my computer"
+    description = "SSH from  bastion security group"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.workstation_ip]
+    security_groups = [aws_security_group.bastion-sgp.id] 
   }
 
   ingress {
@@ -260,6 +263,26 @@ resource "aws_security_group" "wordpress-alb" {
     project = "wordpress"
   }
 }
+resource "aws_security_group" "bastion-sgp" {
+  name        = "Bastion sgp"
+  description = "Allow traffic from my IP address to private instance"
+  vpc_id      = aws_vpc.wordpress-vpc.id
+
+  ingress {
+    description = "20 from my work station only"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.workstation_ip]
+  }
+
+
+  tags = {
+    Name = "Bastion Traffic"
+    project = "wordpress"
+  }
+}
+
 
 //Internet facing application load balancer
 
@@ -279,23 +302,27 @@ resource "aws_lb" "wordpress-alb" {
 }
 
 // create key pairs 
-resource "tls_private_key" "wordpress-key" {
+resource "tls_private_key" "rsa" {
   algorithm = "RSA"
   rsa_bits  = 4096
 }
 
-resource "aws_key_pair" "generated_key" {
-  key_name   = var.key_name
-  public_key = tls_private_key.wordpress-key.public_key_openssh
+resource "aws_key_pair" "wordpress_key" {
+  key_name   = "wordpress-project-key"
+  public_key = tls_private_key.rsa.public_key_openssh
 }
 
+resource "local_file" "key-file" {
+    content  = tls_private_key.rsa.private_key_pem
+    filename = aws_key_pair.wordpress_key.key_name
+}
 //launch templates
 resource "aws_launch_template" "launchtemplate1" {
   name = "wordpress-template"
 
   image_id               = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
-  key_name               = aws_key_pair.generated_key.key_name
+  key_name               = aws_key_pair.wordpress_key.key_name
   vpc_security_group_ids = [aws_security_group.wordpress-server.id]
 
   tag_specifications {
@@ -308,7 +335,21 @@ resource "aws_launch_template" "launchtemplate1" {
     }
   }
 
-  user_data = "${file("install_wordpress.sh")}"
+  user_data = filebase64("install_wordpress.sh")
+}
+
+resource "aws_instance" "bastion" {
+  ami          = data.aws_ami.ubuntu.id
+  instance_type = var.instance_type
+  associate_public_ip_address = "true"
+  availability_zone = var.availability_zones[0]
+  subnet_id = aws_subnet.subnet1.id
+  vpc_security_group_ids = [aws_security_group.bastion-sgp.id]
+  key_name = aws_key_pair.wordpress_key.key_name
+ 
+ tags = {
+    Name = "wp-bastion-instance"
+  }
 }
 
 // ALB target,  Listener
@@ -382,8 +423,6 @@ locals {
   )
 }
 
-
-
 // Add Aurora cluster config
 resource "aws_rds_cluster" "wordpress-aurora-cluster" {
   cluster_identifier      = "aurora-cluster-wordpress"
@@ -392,7 +431,9 @@ resource "aws_rds_cluster" "wordpress-aurora-cluster" {
   database_name           = "wordpressdb"
   master_username         = local.db_creds.username
   master_password         = local.db_creds.password
-  backup_retention_period = 5
-  preferred_backup_window = "02:00-04:00"
+  backup_retention_period = 0
+  //preferred_backup_window = "02:00-04:00"
+  skip_final_snapshot = true
+  apply_immediately = true
 }
 
