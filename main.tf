@@ -286,6 +286,8 @@ resource "aws_autoscaling_group" "server-asg" {
       environment = var.environment[0]
     }
   }
+  user_data = "${base64encode(file("install_wordpress.sh"))}" 
+  
 }
 
 
@@ -407,4 +409,51 @@ resource "aws_security_group" "aurora-sgp" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+}
+
+//Create NAT gateway for private instances to get resources from the internet.  
+//Elastic ip address for the nat gateway
+resource "aws_eip" "nat-eip" {
+  vpc = true
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat-eip.id
+  subnet_id     = aws_subnet.public-subnet1.id
+  depends_on = [aws_internet_gateway.igw-wordpress]
+
+tags = {
+    Name = "Wordpress -NAT"
+    project = "wordpress"
+    Environment = var.environment[0]
+  }  
+}
+
+
+
+resource "aws_route_table" "private-route" {
+  vpc_id = aws_vpc.wordpress-vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_nat_gateway.nat.id
+  }
+
+  tags = {
+    Name = "Private Route Table"
+    project = "wordpress"
+    Environment = var.environment[0]
+  }
+ 
+}
+
+// Associate Private Subnet with private-route for server access
+resource "aws_route_table_association" "private-subnet-route-server" {
+  subnet_id      = aws_subnet.private-subnet1.id
+  route_table_id = aws_route_table.private-route.id
+}
+
+resource "aws_route_table_association" "private-subnet-route-data" {
+  subnet_id      = aws_subnet.private-subnet3.id
+  route_table_id = aws_route_table.private-route.id
 }
