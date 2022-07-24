@@ -1,23 +1,18 @@
 #!/bin/bash
-sudo apt update
-sudo apt install apache2 \
-                 ghostscript \
-                 libapache2-mod-php \
-                 mysql-server \
-                 php \
-                 php-curl \
-                 php-json \
-                 php-mbstring \
-                 php-mysql \
-                 php-xml \
-               
+sudo apt update -y
+sudo apt install -y apache2 
+sudo apt install -y mysql-server
+sudo apt install -y php
+sudo apt install -y php-mysql
 sudo ufw allow 'Apache'
 sudo systemctl start apache2
 sudo systemctl start mysql.service
-curl https://wordpress.org/latest.tar.gz 
-tar -xzf latest.tar.gz 
-cd wordpress
-cp wp-config-sample.php wp-config.php
+cd /tmp/
+curl -O https://wordpress.org/latest.tar.gz
+tar xzvf latest.tar.gz
+touch /tmp/wordpress/.htaccess
+cp /tmp/wordpress/wp-config-sample.php /tmp/wordpress/wp-config.php
+mkdir /tmp/wordpress/wp-content/upgrade
+sudo cp -a /tmp/wordpress/. /var/www/wordpress
 cd /home/ubuntu
-sudo cp -r wordpress/* /var/www/html/
 sudo systemctl restart apache2

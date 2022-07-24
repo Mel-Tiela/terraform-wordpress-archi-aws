@@ -263,12 +263,16 @@ resource "aws_autoscaling_group" "server-asg" {
   max_size           = 1
   min_size           = 1
 
+ lifecycle {
+    ignore_changes = [load_balancers, target_group_arns]
+  }
+
   launch_template {
     id      = aws_launch_template.server-template.id
     version = "$Latest"
   }
 } 
-  
+ 
   resource "aws_launch_template" "server-template" {
   name = "private-wordpress-template"
 
@@ -313,6 +317,14 @@ resource "aws_security_group" "wordpress-server-sg" {
       cidrsubnet(var.cidr_block, 8, 1),
       cidrsubnet(var.cidr_block, 8, 2)
     ]
+  }
+  ingress {
+    description = "Allow traffic HTTP from ALB"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    security_groups = [aws_security_group.app-load-bal-sg.id]
+  
   }
 
   egress {
@@ -456,4 +468,92 @@ resource "aws_route_table_association" "private-subnet-route-server" {
 resource "aws_route_table_association" "private-subnet-route-data" {
   subnet_id      = aws_subnet.private-subnet3.id
   route_table_id = aws_route_table.private-route.id
+}
+
+# CONFIGURE APPLICATION LOAD BALANCER 
+# Internet facing application load balancer to redirect traffic to the private EC2 target group
+resource "aws_lb" "app-load-balancer" {
+  name               = "WP-Application-Load-Balancer"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.app-load-bal-sg.id]
+  subnets            = [aws_subnet.public-subnet1.id, aws_subnet.public-subnet2.id]
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "WP-Application Load Balancer"
+    project = "wordpress"
+    Environment = var.environment[0]
+  }  
+}
+# ALB Security Group
+resource "aws_security_group" "app-load-bal-sg" {
+  name        = "ALB-Security-Group"
+  description = "ALB network traffic"
+  vpc_id      = aws_vpc.wordpress-vpc.id
+
+  ingress {
+    description = "80 from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    
+  }
+
+  tags = {
+    Name = "WP- ALB Security Group "
+    project = "wordpress"
+    Environment = var.environment[0]
+  }  
+}
+
+# ALB Target Group 
+resource "aws_alb_target_group" "webserver" {
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.wordpress-vpc.id
+  target_type = "instance"
+  
+}
+
+resource "aws_alb_listener" "frontend-lis" {
+  load_balancer_arn = aws_lb.app-load-balancer.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_alb_target_group.webserver.arn
+  }
+}
+
+resource "aws_alb_listener_rule" "alb-lis-rule" {
+  listener_arn = aws_alb_listener.frontend-lis.arn
+  priority     = 99
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_alb_target_group.webserver.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/"]
+    }
+  }
+}
+
+# Auto scaling resource for ALB 
+resource "aws_autoscaling_attachment" "asg_attachment_alb" {
+  autoscaling_group_name = aws_autoscaling_group.server-asg.id
+  alb_target_group_arn   = aws_alb_target_group.webserver.arn
+ 
 }
