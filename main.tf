@@ -13,6 +13,17 @@ provider "aws" {
     
 }
 
+/*resource "aws_subnet" "main-subnet" {
+  vpc_id     = aws_vpc.wordpress-vpc.id
+  cidr_block = cidrsubnet(var.cidr_block, 4, 7)
+
+  tags = {
+    Name = "Main Subnet"
+    project = "wordpress"
+    Environment = var.environment[0]
+  }
+}*/
+
 //Create VPC
 resource "aws_vpc" "wordpress-vpc" {
   cidr_block       = var.cidr_block
@@ -240,7 +251,7 @@ network_interfaces {
 
 // Bastion Auto Scaling group for multi AZ 
 resource "aws_autoscaling_group" "bastion-asg" {
-  vpc_zone_identifier = [aws_subnet.public-subnet1.id, aws_subnet.public-subnet2.id]
+  vpc_zone_identifier = [aws_subnet.public-subnet1.id] #aws_subnet.public-subnet2.id
   //availability_zones = var.availability_zones
   desired_capacity   = 1
   max_size           = 1
@@ -389,6 +400,8 @@ resource "aws_rds_cluster" "wordpress-aurora-cluster" {
   vpc_security_group_ids = [aws_security_group.aurora-sgp.id]
   skip_final_snapshot = true
   apply_immediately = true
+  db_subnet_group_name = aws_db_subnet_group.aurora-sng.name
+
   //preferred_backup_window = "02:00-04:00"
   //engine_mode = "serverless"
 
@@ -404,6 +417,7 @@ resource "aws_rds_cluster" "wordpress-aurora-cluster" {
 resource "aws_security_group" "aurora-sgp" {
   name = "Wordpress Aurora Access"
   description = "Aurora security group"
+  vpc_id      = aws_vpc.wordpress-vpc.id
   ingress {
     description = "VPC bound acces"
     from_port = 3306
@@ -414,12 +428,27 @@ resource "aws_security_group" "aurora-sgp" {
       cidrsubnet(var.cidr_block, 8, 4), var.workstation_ip
     ]
   }
+ 
+ ingress {
+    description = "Allow Access From Web Application"
+    from_port = 3306
+    to_port = 3306
+    protocol    = "tcp"
+    security_groups = [aws_security_group.wordpress-server-sg.id]
+  }
+ 
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name = "Data - Aurora Security Group"
+    project = "wordpress"
+    Environment = var.environment[0]
+  }  
 
 }
 
@@ -516,7 +545,7 @@ resource "aws_security_group" "app-load-bal-sg" {
 }
 
 # ALB Target Group 
-resource "aws_alb_target_group" "webserver" {
+resource "aws_lb_target_group" "webserver" {
   port     = 80
   protocol = "HTTP"
   vpc_id   = aws_vpc.wordpress-vpc.id
@@ -531,7 +560,7 @@ resource "aws_alb_listener" "frontend-lis" {
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_alb_target_group.webserver.arn
+    target_group_arn = aws_lb_target_group.webserver.arn
   }
 }
 
@@ -541,7 +570,7 @@ resource "aws_alb_listener_rule" "alb-lis-rule" {
 
   action {
     type             = "forward"
-    target_group_arn = aws_alb_target_group.webserver.arn
+    target_group_arn = aws_lb_target_group.webserver.arn
   }
 
   condition {
@@ -552,8 +581,29 @@ resource "aws_alb_listener_rule" "alb-lis-rule" {
 }
 
 # Auto scaling resource for ALB 
-resource "aws_autoscaling_attachment" "asg_attachment_alb" {
+resource "aws_autoscaling_attachment" "asg_attachment_bar" {
   autoscaling_group_name = aws_autoscaling_group.server-asg.id
-  alb_target_group_arn   = aws_alb_target_group.webserver.arn
- 
+  lb_target_group_arn    = aws_lb_target_group.webserver.arn
+}
+# Fix aurora cluster in different VPC
+resource "aws_db_subnet_group" "aurora-sng" {
+  name       = "wordpress-subnet-group"
+  subnet_ids = ["${aws_subnet.private-subnet4.id}","${aws_subnet.private-subnet3.id}"]
+
+  tags = {
+    Name = "Aurora Cluster Subnet Group"
+    project = "wordpress"
+    Environment = var.environment[0]
+  }
+}
+
+#Create Aurora Cluster Instance
+resource "aws_rds_cluster_instance" "aurora-cluster_instances" {
+  count              = 1
+  identifier         = "aurora-cluster-wordpress-${count.index}"
+  cluster_identifier = aws_rds_cluster.wordpress-aurora-cluster.id
+  instance_class     = "db.r6g.large"
+  engine             = aws_rds_cluster.wordpress-aurora-cluster.engine
+  engine_version     = aws_rds_cluster.wordpress-aurora-cluster.engine_version
+  availability_zone = var.availability_zones[0]
 }

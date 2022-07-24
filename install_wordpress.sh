@@ -13,6 +13,8 @@ tar xzvf latest.tar.gz
 touch /tmp/wordpress/.htaccess
 cp /tmp/wordpress/wp-config-sample.php /tmp/wordpress/wp-config.php
 mkdir /tmp/wordpress/wp-content/upgrade
-sudo cp -a /tmp/wordpress/. /var/www/wordpress
+sudo cp -a /tmp/wordpress/. /var/www/html/wordpress
+cd /var/www/html/
+rm index.html
 cd /home/ubuntu
 sudo systemctl restart apache2
